@@ -10,8 +10,9 @@
 #      make ARCH=x86
 #
 # 2. Build for ARM (requires aarch64-linux-gnu-gcc on PATH):
-#      sudo apt install gcc-aarch64-linux-gnu   # if not installed
 #      make ARCH=arm
+#      The required json-c arm64 package is downloaded automatically from
+#      ports.ubuntu.com on first build and cached in build/deps/ (gitignored).
 #
 # 3. Debug build:
 #      make ARCH=x86 DEBUG=DEBUG
@@ -22,10 +23,24 @@
 # 5. Rebuild from scratch:
 #      make ARCH=<x86|arm> rebuild
 #
-# Notes
-# ─────
-# - ARM uses the system aarch64-linux-gnu-gcc cross-compiler.
-# - json-c must be installed for the target (libjson-c-dev:arm64 on Debian/Ubuntu).
+# Dependencies
+# ────────────
+# x86:
+#   sudo apt install libjson-c-dev
+#
+# ARM cross-compilation:
+#   sudo apt install gcc-aarch64-linux-gnu
+#   (json-c arm64 is fetched automatically on first build; no system changes needed)
+#
+# Custom SDK / sysroot
+# ────────────────────
+# Override JSONC_ARM_LIB and JSONC_ARM_INC to point at your SDK instead of the
+# auto-downloaded package:
+#   make ARCH=arm JSONC_ARM_LIB=/opt/sdk/lib/libjson-c.a \
+#                 JSONC_ARM_INC=/opt/sdk/include
+#
+# For x86 with a custom pkg-config wrapper:
+#   make ARCH=x86 PKG_CONFIG=/opt/sdk/bin/pkg-config
 ###############################################################################
 
 # ── Build options ─────────────────────────────────────────────────────────
@@ -63,16 +78,51 @@ SRCS += \
 OBJS = $(SRCS:.c=.o)
 
 # ── ARM toolchain ─────────────────────────────────────────────────────────
-ARM_CC          = aarch64-linux-gnu-gcc
-ARM_LIBJSONC_A  = lib/arm64/libjson-c.a
+ARM_CC = aarch64-linux-gnu-gcc
+
+# ── json-c: ARM (auto-downloaded from ports.ubuntu.com, cached, not in git) ──
+#
+# Override JSONC_ARM_VERSION to pin a different release, or override
+# JSONC_ARM_LIB / JSONC_ARM_INC entirely to use a custom SDK.
+JSONC_ARM_VERSION ?= 0.13.1+dfsg-7ubuntu0.3
+JSONC_ARM_DEB      = libjson-c-dev_$(JSONC_ARM_VERSION)_arm64.deb
+JSONC_ARM_URL      = http://ports.ubuntu.com/ubuntu-ports/pool/main/j/json-c/$(JSONC_ARM_DEB)
+JSONC_ARM_DIR     ?= build/deps/arm64
+JSONC_ARM_LIB     ?= $(JSONC_ARM_DIR)/usr/lib/aarch64-linux-gnu/libjson-c.a
+JSONC_ARM_INC     ?= $(JSONC_ARM_DIR)/usr/include
+
+# ── Architecture-specific settings ────────────────────────────────────────
+ifeq ($(ARCH), x86)
+    CC         = gcc
+    OUTPUT_DIR = x86
+    EXTRA_DEPS =
+
+    # Resolve json-c via system pkg-config.
+    PKG_CONFIG   ?= pkg-config
+    JSONC_CFLAGS := $(shell $(PKG_CONFIG) --cflags json-c 2>/dev/null)
+    JSONC_LIBS   := $(shell $(PKG_CONFIG) --libs   json-c 2>/dev/null)
+    ifeq ($(JSONC_LIBS),)
+        $(error json-c not found. Run: sudo apt install libjson-c-dev)
+    endif
+
+else ifeq ($(ARCH), arm)
+    CC         = $(ARM_CC)
+    OUTPUT_DIR = arm
+    # EXTRA_DEPS triggers the download rule before the link step.
+    EXTRA_DEPS   = $(JSONC_ARM_LIB)
+    JSONC_CFLAGS = -I$(JSONC_ARM_INC)
+    # Link the static .a directly; produces a self-contained ARM binary.
+    JSONC_LIBS   = $(JSONC_ARM_LIB)
+
+else
+    $(error Unsupported ARCH "$(ARCH)". Use ARCH=x86 or ARCH=arm.)
+endif
 
 # ── Common flags ──────────────────────────────────────────────────────────
 CFLAGS_COMMON  = -Wall -Wextra -std=c11 -D_GNU_SOURCE
 CFLAGS_COMMON += -Iinclude -Idevices
 CFLAGS_COMMON += -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3
-
-# x86: link against system libjson-c dynamically
-LDLIBS_X86 = -lpthread -ljson-c -ldl
+CFLAGS_COMMON += $(JSONC_CFLAGS)
 
 ifeq ($(DEBUG), DEBUG)
     CFLAGS_COMMON += -g -O0 -DDEBUG_MODE
@@ -80,38 +130,37 @@ else
     CFLAGS_COMMON += -O2
 endif
 
-# ── Architecture-specific settings ────────────────────────────────────────
-ifeq ($(ARCH), x86)
-    CC         = gcc
-    CFLAGS     = $(CFLAGS_COMMON)
-    LDFLAGS    =
-    LDLIBS     = $(LDLIBS_X86)
-    OUTPUT_DIR = x86
-
-else ifeq ($(ARCH), arm)
-    CC         = $(ARM_CC)
-    CFLAGS     = $(CFLAGS_COMMON)
-    LDFLAGS    =
-    # Link libjson-c statically from the bundled prebuilt; system may not have arm64 package.
-    LDLIBS     = -lpthread -ldl $(ARM_LIBJSONC_A)
-    OUTPUT_DIR = arm
-
-else
-    $(error Unsupported ARCH "$(ARCH)". Use ARCH=x86 or ARCH=arm.)
-endif
+CFLAGS  = $(CFLAGS_COMMON)
+LDFLAGS =
+LDLIBS  = -lpthread -ldl $(JSONC_LIBS)
 
 # ── Build rules ───────────────────────────────────────────────────────────
 .PHONY: all clean rebuild
 
 all: $(OUTPUT_DIR)/$(TARGET)
 
-# Link: object files come BEFORE -l flags so the linker resolves symbols correctly.
-$(OUTPUT_DIR)/$(TARGET): $(OBJS)
+# Link: EXTRA_DEPS ensures json-c arm64 is present before linking when ARCH=arm.
+# Object files come BEFORE library flags so the linker resolves symbols correctly.
+$(OUTPUT_DIR)/$(TARGET): $(EXTRA_DEPS) $(OBJS)
 	@mkdir -p $(OUTPUT_DIR)
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# ── ARM json-c: download and extract from ports.ubuntu.com ────────────────
+#
+# Runs only when $(JSONC_ARM_LIB) does not exist (i.e. first build or after
+# "make clean"). The downloaded .deb is removed after extraction.
+$(JSONC_ARM_LIB):
+	@echo ">>> json-c arm64 not found. Downloading $(JSONC_ARM_VERSION) from ports.ubuntu.com ..."
+	@mkdir -p build/deps
+	@curl -fsSL --retry 3 -o build/deps/$(JSONC_ARM_DEB) $(JSONC_ARM_URL) \
+	    || { echo "ERROR: download failed: $(JSONC_ARM_URL)"; exit 1; }
+	@dpkg-deb --extract build/deps/$(JSONC_ARM_DEB) $(JSONC_ARM_DIR) \
+	    || { rm -rf $(JSONC_ARM_DIR); exit 1; }
+	@rm -f build/deps/$(JSONC_ARM_DEB)
+	@echo ">>> json-c arm64 ready."
 
 clean:
 	rm -f $(OBJS)
