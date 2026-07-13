@@ -41,7 +41,7 @@
  * @brief Total addressable registers in the shared internal pool.
  * Must be large enough to cover all per-unit pool_address values.
  */
-#define INTERNAL_POOL_SIZE 1024
+#define INTERNAL_POOL_SIZE 65535
 
 /* ── Access permission ────────────────────────────────────────────────── */
 

@@ -6,6 +6,11 @@
 #
 # Usage
 # ─────
+# 0. First time on a fresh machine, install system dependencies:
+#      make setup ARCH=x86   (installs gcc, libjson-c-dev)
+#      make setup ARCH=arm   (installs gcc-aarch64-linux-gnu, curl)
+#      (requires sudo; you will be prompted for a password)
+#
 # 1. Build for x86 (host):
 #      make ARCH=x86
 #
@@ -13,6 +18,7 @@
 #      make ARCH=arm
 #      The required json-c arm64 package is downloaded automatically from
 #      ports.ubuntu.com on first build and cached in build/deps/ (gitignored).
+#      Uses curl if available, falls back to wget otherwise.
 #
 # 3. Debug build:
 #      make ARCH=x86 DEBUG=DEBUG
@@ -26,10 +32,10 @@
 # Dependencies
 # ────────────
 # x86:
-#   sudo apt install libjson-c-dev
+#   sudo apt install gcc libjson-c-dev
 #
 # ARM cross-compilation:
-#   sudo apt install gcc-aarch64-linux-gnu
+#   sudo apt install gcc-aarch64-linux-gnu curl
 #   (json-c arm64 is fetched automatically on first build; no system changes needed)
 #
 # Custom SDK / sysroot
@@ -91,6 +97,16 @@ JSONC_ARM_DIR     ?= build/deps/arm64
 JSONC_ARM_LIB     ?= $(JSONC_ARM_DIR)/usr/lib/aarch64-linux-gnu/libjson-c.a
 JSONC_ARM_INC     ?= $(JSONC_ARM_DIR)/usr/include
 
+# Toolchain/library preflight checks only matter when we're actually about
+# to compile or link. Skip them for goals like "clean" or "setup" so those
+# still work on a bare machine that hasn't installed any dependencies yet
+# (e.g. "make setup ARCH=arm" must run even though the ARM compiler is
+# exactly what it's about to install).
+_GOALS             := $(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)
+_NON_BUILD_GOALS   := $(filter clean setup,$(_GOALS))
+_BUILD_GOALS       := $(filter-out clean setup,$(_GOALS))
+SKIP_TOOLCHAIN_CHECK := $(and $(_NON_BUILD_GOALS),$(if $(_BUILD_GOALS),,1))
+
 # ── Architecture-specific settings ────────────────────────────────────────
 ifeq ($(ARCH), x86)
     CC         = gcc
@@ -101,8 +117,10 @@ ifeq ($(ARCH), x86)
     PKG_CONFIG   ?= pkg-config
     JSONC_CFLAGS := $(shell $(PKG_CONFIG) --cflags json-c 2>/dev/null)
     JSONC_LIBS   := $(shell $(PKG_CONFIG) --libs   json-c 2>/dev/null)
-    ifeq ($(JSONC_LIBS),)
-        $(error json-c not found. Run: sudo apt install libjson-c-dev)
+    ifeq ($(SKIP_TOOLCHAIN_CHECK),)
+        ifeq ($(JSONC_LIBS),)
+            $(error json-c not found. Run: sudo apt install libjson-c-dev (or: make setup ARCH=x86))
+        endif
     endif
 
 else ifeq ($(ARCH), arm)
@@ -113,6 +131,14 @@ else ifeq ($(ARCH), arm)
     JSONC_CFLAGS = -I$(JSONC_ARM_INC)
     # Link the static .a directly; produces a self-contained ARM binary.
     JSONC_LIBS   = $(JSONC_ARM_LIB)
+
+    # Preflight: fail fast with a clear message instead of a cryptic
+    # "command not found" buried inside make's implicit compile rule.
+    ifeq ($(SKIP_TOOLCHAIN_CHECK),)
+        ifeq ($(shell command -v $(ARM_CC) 2>/dev/null),)
+            $(error $(ARM_CC) not found. Run: sudo apt install gcc-aarch64-linux-gnu (or: make setup ARCH=arm))
+        endif
+    endif
 
 else
     $(error Unsupported ARCH "$(ARCH)". Use ARCH=x86 or ARCH=arm.)
@@ -135,7 +161,7 @@ LDFLAGS =
 LDLIBS  = -lpthread -ldl $(JSONC_LIBS)
 
 # ── Build rules ───────────────────────────────────────────────────────────
-.PHONY: all clean rebuild
+.PHONY: all clean rebuild setup
 
 all: $(OUTPUT_DIR)/$(TARGET)
 
@@ -152,11 +178,20 @@ $(OUTPUT_DIR)/$(TARGET): $(EXTRA_DEPS) $(OBJS)
 #
 # Runs only when $(JSONC_ARM_LIB) does not exist (i.e. first build or after
 # "make clean"). The downloaded .deb is removed after extraction.
+#
+# Tries curl first, falls back to wget, since minimal/fresh Ubuntu installs
+# commonly ship with only one of the two (or neither).
 $(JSONC_ARM_LIB):
 	@echo ">>> json-c arm64 not found. Downloading $(JSONC_ARM_VERSION) from ports.ubuntu.com ..."
 	@mkdir -p build/deps
-	@curl -fsSL --retry 3 -o build/deps/$(JSONC_ARM_DEB) $(JSONC_ARM_URL) \
-	    || { echo "ERROR: download failed: $(JSONC_ARM_URL)"; exit 1; }
+	@if command -v curl >/dev/null 2>&1; then \
+	    curl -fsSL --retry 3 -o build/deps/$(JSONC_ARM_DEB) $(JSONC_ARM_URL); \
+	elif command -v wget >/dev/null 2>&1; then \
+	    wget -q --tries=3 -O build/deps/$(JSONC_ARM_DEB) $(JSONC_ARM_URL); \
+	else \
+	    echo "ERROR: neither curl nor wget found. Run: sudo apt install curl (or: make setup ARCH=arm)"; \
+	    exit 1; \
+	fi || { echo "ERROR: download failed: $(JSONC_ARM_URL)"; rm -f build/deps/$(JSONC_ARM_DEB); exit 1; }
 	@dpkg-deb --extract build/deps/$(JSONC_ARM_DEB) $(JSONC_ARM_DIR) \
 	    || { rm -rf $(JSONC_ARM_DIR); exit 1; }
 	@rm -f build/deps/$(JSONC_ARM_DEB)
@@ -167,3 +202,21 @@ clean:
 	rm -rf x86 arm
 
 rebuild: clean all
+
+# ── One-time host setup ──────────────────────────────────────────────────
+#
+# Installs the system packages needed to build on a fresh machine. Requires
+# sudo (you will be prompted for a password); this cannot be automated away
+# since it modifies system package state.
+#   make setup ARCH=x86   -> installs gcc, libjson-c-dev
+#   make setup ARCH=arm   -> installs gcc-aarch64-linux-gnu, curl
+setup:
+ifeq ($(ARCH), x86)
+	sudo apt-get update
+	sudo apt-get install -y gcc libjson-c-dev
+else ifeq ($(ARCH), arm)
+	sudo apt-get update
+	sudo apt-get install -y gcc-aarch64-linux-gnu curl
+else
+	$(error Unsupported ARCH "$(ARCH)". Use ARCH=x86 or ARCH=arm.)
+endif

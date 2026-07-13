@@ -6,7 +6,7 @@
             "modbus_format": "RTU",
             "modbus_role": "Master",
             "modbus_uid": 1,
-            "path": "/dev/ttyAP0",
+            "path": "/dev/ttyAP1",
             "baud_rate": 9600
         }
     ]

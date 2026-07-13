@@ -1,12 +1,15 @@
 /**
  * @file inverter_cmos_bridge.c
- * @brief CMOS ↔ Inverter Modbus RTU bridge.
+ * @brief CMOS ↔ Inverter Modbus bridge.
  *
  * Two threads are started by inverter_cmos_bridge_start():
  *
  *  1. cmos_sub_thread  – runs cmos_sub_spin_ctx() (blocking).
- *       • on_write_cmd: parse → access-check → inverter_cmd_push()
- *       • on_read_cmd:  parse → pool_read_register()
+ *       The HMI only sends cmd + value (no uid/addr).  Each HMI command has
+ *       its own on_xxx_cmd handler (e.g. on_output_voltage_set_cmd) that owns
+ *       the register address, converts value to uint16_t, and delegates the
+ *       shared validate/enqueue (or validate/read) flow to on_write() /
+ *       on_read().
  *
  *  2. cmos_pub_poll_thread – calls cmos_pub_poll() every 10 ms.
  *       Keeps the read-response publisher alive for new subscriber connections.
@@ -34,196 +37,183 @@
 /* ── CMOS connection constants ────────────────────────────────────────── */
 #define BRIDGE_MASTER_IP        "127.0.0.1"
 #define BRIDGE_MASTER_PORT      10000
-#define BRIDGE_PUB_PORT         12001       /* listen port for read responses  */
-#define BRIDGE_NODE_NAME        "INV_NODE"  /* node name for master registration */
-#define BRIDGE_SUB_TOPIC        "INV_SUB"   /* topic for write/read requests   */
-#define BRIDGE_PUB_TOPIC        "INV"       /* topic for read responses        */
-#define BRIDGE_PUB_POLL_US      10000u      /* 10 ms poll interval             */
+#define BRIDGE_PUB_PORT         12001           /* listen port for read responses  */
+#define BRIDGE_NODE_NAME        "inverter_node"  /* node name for master registration */
+#define BRIDGE_SUB_HMI_TOPIC    "hmi_test_command_output"   /* topic for write/read requests   */
+#define BRIDGE_PUB_TOPIC        "inverter"       /* topic for read responses        */
+#define BRIDGE_PUB_POLL_US      10000u           /* 10 ms poll interval             */
+
+/* this project currently only wires up Inverter#1, so uid is fixed */
+#define INVERTER_BRIDGE_DEFAULT_UID  1u
 
 /* ── Module-level state ───────────────────────────────────────────────── */
 static pthread_t        g_sub_thread;
 static pthread_t        g_pub_poll_thread;
 static volatile int     g_bridge_running = 0;
 
-/* ── Internal helpers ─────────────────────────────────────────────────── */
+/* ── Register access core (shared by every on_xxx_cmd handler) ───────── */
 
 /**
- * @brief Extract a value from a comma-delimited key=value string.
+ * @brief Validate and enqueue a single-register write.
  *
- * Searches for "key=" token (delimited by ',' or end-of-string) and copies
- * the corresponding value into dest.
+ * Looks up the profile for uid, checks that addr is mapped and not
+ * ACCESS_RO, then pushes the write command via inverter_cmd_push().
  *
- * Example src: "uid=1,addr=0x0100,val=220"
- *   parse_token(src, "addr", out, size)  →  out = "0x0100"
+ * Every on_xxx_cmd handler should call this instead of repeating the
+ * lookup/validate/enqueue sequence itself.  Must stay non-blocking.
  *
- * @return 0 on success, -1 if key not found.
+ * @return 0 on success, -1 on validation failure or queue-full.
  */
-static int parse_token(const char *src, const char *key,
-                       char *dest, size_t dest_size)
+static int on_write(uint8_t uid, uint16_t addr, uint16_t val)
 {
-    char   buf[256];
-    char   search[64];
-    char  *p;
-    size_t key_len;
-    size_t i;
-
-    strncpy(buf, src, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-
-    snprintf(search, sizeof(search), "%s=", key);
-    key_len = strlen(search);
-
-    p = buf;
-    while (*p) {
-        if (strncmp(p, search, key_len) == 0) {
-            p += key_len;
-            i = 0;
-            while (*p && *p != ',' && i < dest_size - 1) {
-                dest[i++] = *p++;
-            }
-            dest[i] = '\0';
-            return 0;
-        }
-        while (*p && *p != ',') {
-            p++;
-        }
-        if (*p == ',') {
-            p++;
-        }
-    }
-
-    return -1;
-}
-
-/* ── CMOS callbacks ───────────────────────────────────────────────────── */
-
-/**
- * @brief CMOS callback for write commands.
- *
- * Called by cmos_sub_spin_ctx() when a message arrives with
- * type=modbus key=write.  The callback receives only the value field:
- *   "uid=<n>,addr=<hex>,val=<dec>"
- *
- * Validates register access (rejects ACCESS_RO registers) and enqueues the
- * write command via inverter_cmd_push().  Must stay non-blocking.
- */
-static void on_write_cmd(const char *topic, const char *value)
-{
-    char     uid_str[16];
-    char     addr_str[16];
-    char     val_str[16];
-    uint8_t  uid;
-    uint16_t addr;
-    uint16_t val;
-
-    (void)topic;
-
-    if (parse_token(value, "uid",  uid_str,  sizeof(uid_str))  != 0 ||
-        parse_token(value, "addr", addr_str, sizeof(addr_str)) != 0 ||
-        parse_token(value, "val",  val_str,  sizeof(val_str))  != 0) {
-        LOG_WARNING("[CMOS Bridge] write: malformed value – expected "
-                    "uid=<n>,addr=<hex>,val=<dec>  got: '%s'", value);
-        return;
-    }
-
-    uid  = (uint8_t)atoi(uid_str);
-    addr = (uint16_t)strtoul(addr_str, NULL, 0);
-    val  = (uint16_t)strtoul(val_str,  NULL, 0);
-
     const device_map_profile_t *profile = inverter_find_profile_by_uid(uid);
     if (!profile) {
         LOG_WARNING("[CMOS Bridge] write: unknown uid=%u", uid);
-        return;
+        return -1;
     }
 
     const device_register_mapping_t *entry = device_find_slot(profile, addr);
     if (!entry) {
         LOG_WARNING("[CMOS Bridge] write: addr 0x%04X not mapped in profile "
                     "uid=%u", addr, uid);
-        return;
+        return -1;
     }
 
     if (entry->access == ACCESS_RO) {
         LOG_WARNING("[CMOS Bridge] write: addr 0x%04X is ACCESS_RO (uid=%u) "
                     "– rejected", addr, uid);
-        return;
+        return -1;
     }
 
     if (inverter_cmd_push(uid, addr, &val, 1, INVERTER_WRITE_MODE_AUTO) != 0) {
         LOG_ERROR("[CMOS Bridge] write: command queue full for uid=%u "
                   "addr=0x%04X", uid, addr);
+        return -1;
     }
 
     LOG_DEBUG("[CMOS Bridge] write queued: uid=%u addr=0x%04X val=%u",
               uid, addr, val);
+    return 0;
 }
 
 /**
- * @brief CMOS callback for read commands.
+ * @brief Validate and read a single register from the cached pool.
  *
- * Called by cmos_sub_spin_ctx() when a message arrives with
- * type=modbus key=read.  The callback receives only the value field:
- *   "uid=<n>,addr=<hex>"
+ * Looks up the profile for uid, checks that addr is mapped and not
+ * ACCESS_WO, then reads the cached pool value (updated continuously by
+ * process_callback) into *out_val.
  *
- * Reads the cached pool value (updated continuously by process_callback) and
- * logs the result.  Must stay non-blocking.
+ * Every on_xxx_cmd handler should call this instead of repeating the
+ * lookup/validate/read sequence itself.  Must stay non-blocking.
+ * Publishing the result (if needed) is left to the caller, since the
+ * response topic/key format may differ per command.
+ *
+ * @return 0 on success (*out_val filled), -1 on validation or read failure.
  */
-static void on_read_cmd(const char *topic, const char *value)
+static int on_read(uint8_t uid, uint16_t addr, uint16_t *out_val)
 {
-    char     uid_str[16];
-    char     addr_str[16];
-    uint8_t  uid;
-    uint16_t addr;
-    uint16_t pool_val = 0;
-
-    (void)topic;
-
-    if (parse_token(value, "uid",  uid_str,  sizeof(uid_str))  != 0 ||
-        parse_token(value, "addr", addr_str, sizeof(addr_str)) != 0) {
-        LOG_WARNING("[CMOS Bridge] read: malformed value – expected "
-                    "uid=<n>,addr=<hex>  got: '%s'", value);
-        return;
-    }
-
-    uid  = (uint8_t)atoi(uid_str);
-    addr = (uint16_t)strtoul(addr_str, NULL, 0);
-
     const device_map_profile_t *profile = inverter_find_profile_by_uid(uid);
     if (!profile) {
         LOG_WARNING("[CMOS Bridge] read: unknown uid=%u", uid);
-        return;
+        return -1;
     }
 
     const device_register_mapping_t *entry = device_find_slot(profile, addr);
     if (!entry) {
         LOG_WARNING("[CMOS Bridge] read: addr 0x%04X not mapped in profile "
                     "uid=%u", addr, uid);
-        return;
+        return -1;
     }
 
     if (entry->access == ACCESS_WO) {
         LOG_WARNING("[CMOS Bridge] read: addr 0x%04X is ACCESS_WO (uid=%u) "
                     "– rejected", addr, uid);
-        return;
+        return -1;
     }
 
-    if (!pool_read_register(entry->pool_address, &pool_val)) {
+    if (!pool_read_register(entry->pool_address, out_val)) {
         LOG_ERROR("[CMOS Bridge] read: pool_read failed pool_addr=0x%04X "
                   "(uid=%u addr=0x%04X)", entry->pool_address, uid, addr);
-        return;
+        return -1;
     }
 
-    /*
-     * Publish result to BRIDGE_PUB_TOPIC.
-     * Uncomment when read-response publishing is required:
-     *
-     *   char result_str[16];
-     *   snprintf(result_str, sizeof(result_str), "%u", pool_val);
-     *   cmos_publish(NULL, "modbus_resp", addr_str, result_str);
-     */
-
     LOG_DEBUG("[CMOS Bridge] read uid=%u addr=0x%04X pool[0x%04X]=%u",
-              uid, addr, entry->pool_address, pool_val);
+              uid, addr, entry->pool_address, *out_val);
+    return 0;
+}
+
+/* ── CMOS callbacks ───────────────────────────────────────────────────── */
+
+static void on_output_voltage_set_cmd(const char *topic, const char *value)
+{
+    uint16_t addr = 0x0100;
+    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
+
+    (void)topic;
+
+    LOG_INFO("[CMOS Bridge] output voltage set command received: '%s'", value);
+
+    on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
+}
+
+static void on_output_frequency_set_cmd(const char *topic, const char *value)
+{
+    uint16_t addr = 0x0101;
+    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
+
+    (void)topic;
+
+    LOG_INFO("[CMOS Bridge] output frequency set command received: '%s'", value);
+
+    on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
+}
+
+static void on_battery_low_voltage_set_cmd(const char *topic, const char *value)
+{
+    uint16_t addr = 0x0102;
+    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
+
+    (void)topic;
+
+    LOG_INFO("[CMOS Bridge] battery low voltage set command received: '%s'", value);
+
+    on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
+}
+
+static void on_battery_high_voltage_set_cmd(const char *topic, const char *value)
+{
+    uint16_t addr = 0x0103;
+    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
+
+    (void)topic;
+
+    LOG_INFO("[CMOS Bridge] battery high voltage set command received: '%s'", value);
+
+    on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
+}
+
+static void on_max_charge_current_set_cmd(const char *topic, const char *value)
+{
+    uint16_t addr = 0x0104;
+    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
+
+    (void)topic;
+
+    LOG_INFO("[CMOS Bridge] max charge current set command received: '%s'", value);
+
+    on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
+}
+
+static void on_work_mode_set_cmd(const char *topic, const char *value)
+{
+    uint16_t addr = 0x0105;
+    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
+
+    (void)topic;
+
+    LOG_INFO("[CMOS Bridge] work mode set command received: '%s'", value);
+
+    on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
 }
 
 /* ── Thread cleanup handler ───────────────────────────────────────────── */
@@ -243,10 +233,11 @@ static void cleanup_sub_ctx(void *arg)
 /**
  * @brief CMOS subscriber thread.
  *
- * Subscribes to BRIDGE_SUB_TOPIC with two filter slots (write / read) and
- * enters cmos_sub_spin_ctx() which blocks indefinitely.  The thread is
- * stopped via pthread_cancel(); epoll_wait() inside spin_ctx is a
- * cancellation point so the thread exits cleanly.
+ * Subscribes to BRIDGE_SUB_HMI_TOPIC once per HMI command (type="command",
+ * key=<cmd name>), each routed to its own on_xxx_cmd handler, then enters
+ * cmos_sub_spin_ctx() which blocks indefinitely.  The thread is stopped via
+ * pthread_cancel(); epoll_wait() inside spin_ctx is a cancellation point so
+ * the thread exits cleanly.
  */
 static void *cmos_sub_thread(void *arg)
 {
@@ -254,7 +245,7 @@ static void *cmos_sub_thread(void *arg)
 
     cmos_sub_ctx_t *ctx = cmos_sub_create(BRIDGE_MASTER_IP,
                                            BRIDGE_MASTER_PORT,
-                                           "inv_sub");
+                                           "inverter_sub");
     if (!ctx) {
         LOG_ERROR("[CMOS Bridge] failed to create subscriber context.");
         return NULL;
@@ -262,11 +253,15 @@ static void *cmos_sub_thread(void *arg)
 
     pthread_cleanup_push(cleanup_sub_ctx, ctx);
 
-    cmos_sub_add(ctx, BRIDGE_SUB_TOPIC, NULL, "modbus", "write", on_write_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_TOPIC, NULL, "modbus", "read",  on_read_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "main_pump", on_output_voltage_set_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "output_frequency_set",     on_output_frequency_set_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "battery_low_voltage_set",  on_battery_low_voltage_set_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "battery_high_voltage_set", on_battery_high_voltage_set_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "max_charge_current_set",   on_max_charge_current_set_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "work_mode_set",            on_work_mode_set_cmd);
 
     LOG_INFO("[CMOS Bridge] subscriber thread ready, "
-             "topic='%s' (write + read).", BRIDGE_SUB_TOPIC);
+             "topic='%s' (write + read).", BRIDGE_SUB_HMI_TOPIC);
 
     cmos_sub_spin_ctx(ctx);  /* blocks – exited only by pthread_cancel() */
 
@@ -276,6 +271,14 @@ static void *cmos_sub_thread(void *arg)
 
 /**
  * @brief Read one pool register and publish its value to BRIDGE_PUB_TOPIC.
+ *
+ * Converts the cached uint16_t pool value to a decimal string and forwards
+ * it to cmos_publish().  Intended for periodic push from cmos_pub_poll_thread.
+ *
+ * @param cfg   Module configuration (used for connection-state string).
+ * @param type  CMOS message type field.
+ * @param key   CMOS message key field (e.g. register address string).
+ * @param pool_address  Absolute index into internal_pool[].
  */
 static void publish_pool_register(const module_config_t *cfg,
                                   const char *type,
@@ -318,7 +321,7 @@ static void *cmos_pub_poll_thread(void *arg)
         cmos_pub_poll();
 
         for (int i = 0; i < global_config.inverter_count; i++) {
-            publish_pool_register(&inverters[i], "ac_output_voltage", NULL, 0x0003);
+            publish_pool_register(&inverters[i], NULL, "ac_output_voltage", 0x0003);
         }
 
         usleep(BRIDGE_PUB_POLL_US);
@@ -343,8 +346,7 @@ int inverter_cmos_bridge_start(void)
     g_bridge_running = 1;
 
     if (pthread_create(&g_pub_poll_thread, NULL,
-                       cmos_pub_poll_thread,
-                       global_config.inverter) != 0) {
+                       cmos_pub_poll_thread, global_config.inverter) != 0) {
         LOG_ERROR("[CMOS Bridge] failed to start publisher poll thread.");
         g_bridge_running = 0;
         cmos_pub_close();

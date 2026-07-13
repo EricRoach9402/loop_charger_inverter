@@ -4,21 +4,32 @@ Inverter monitoring daemon for Linux. Supports x86 and ARM (aarch64) targets.
 
 ## Build dependencies
 
-### x86
+### One-time setup (fresh machine / new computer)
 
 ```bash
-sudo apt install gcc libjson-c-dev
+# x86 (installs gcc, libjson-c-dev)
+make setup ARCH=x86
+
+# ARM cross-compilation (installs gcc-aarch64-linux-gnu, curl)
+make setup ARCH=arm
 ```
 
-### ARM cross-compilation
+This runs `sudo apt-get install ...` under the hood, so you'll be prompted
+for your sudo password. Equivalent manual commands:
 
 ```bash
-sudo apt install gcc-aarch64-linux-gnu
+sudo apt install gcc libjson-c-dev              # x86
+sudo apt install gcc-aarch64-linux-gnu curl     # ARM
 ```
 
-The json-c arm64 library is downloaded automatically from ports.ubuntu.com
-on the first `make ARCH=arm` run and cached in `build/deps/` (gitignored).
-No other setup or system changes are required.
+The json-c arm64 library itself is downloaded automatically from
+ports.ubuntu.com on the first `make ARCH=arm` run and cached in
+`build/deps/` (gitignored) — no manual step needed for that part. The
+download uses `curl` if present, otherwise falls back to `wget`.
+
+If you run `make` before `make setup`, the Makefile fails fast with a
+clear error telling you exactly what's missing, instead of a cryptic
+"command not found".
 
 ## Build
 
