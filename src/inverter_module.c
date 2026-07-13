@@ -283,10 +283,30 @@ int inverter_rtu_init_callback(module_config_t *cfg)
         return -1;
     }
 
+    /*
+     * Opening the serial port only proves the local device node exists; it
+     * says nothing about whether an Inverter slave is actually present on
+     * the bus.  Probe a known register with FC03 so that an absent device
+     * fails init_callback (and is retried by the thread loop) instead of
+     * falling through to a process_callback scan against nothing.
+     */
+    if (unit->profile->table_count > 0) {
+        uint16_t probe_addr = unit->profile->table[0].device_address;
+
+        if (mb_rtu_client_probe_device(&unit->rtu_ctx, probe_addr, 1) !=
+            MB_RTU_CLIENT_OK) {
+            LOG_ERROR("[Inverter RTU] %s: device not responding on %s "
+                      "(uid=%d).", cfg->name, cfg->path, cfg->modbus_uid);
+            mb_rtu_client_disconnect(&unit->rtu_ctx);
+            return -1;
+        }
+    }
+
     unit->comm_fail_count = 0;
     cfg->connection_state = CONNECTION_CONNECTED;
 
-    LOG_INFO("[Inverter RTU] %s: serial port open.", cfg->name);
+    LOG_INFO("[Inverter RTU] %s: serial port open, device responding.",
+             cfg->name);
     return 0;
 }
 

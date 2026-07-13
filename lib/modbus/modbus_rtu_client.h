@@ -153,6 +153,26 @@ int mb_rtu_client_write_multiple_registers(mb_rtu_client_ctx_t *ctx,
                                             uint16_t addr, uint16_t qty,
                                             const uint16_t *data);
 
+/* ── Device presence probe ─────────────────────────────────────────────── */
+
+/**
+ * @brief Probe whether a slave device is actually present and responding.
+ *
+ * Opening a serial port only proves the local device node exists; it says
+ * nothing about whether a Modbus slave is present on the bus.  This issues
+ * one FC03 read of qty registers starting at addr and reports whether a
+ * valid response was received, so callers can distinguish "port open" from
+ * "device online".
+ *
+ * @param ctx   Open context (mb_rtu_client_connect() must have succeeded).
+ * @param addr  A register address known to exist in the device's map.
+ * @param qty   Number of registers to read (typically 1).
+ * @return MB_RTU_CLIENT_OK if the device responded, a positive Modbus
+ *         exception code, or a negative MB_RTU_CLIENT_ERR_* code.
+ */
+int mb_rtu_client_probe_device(mb_rtu_client_ctx_t *ctx,
+                                uint16_t addr, uint16_t qty);
+
 #ifdef __cplusplus
 }
 #endif

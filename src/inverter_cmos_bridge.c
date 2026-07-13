@@ -37,11 +37,11 @@
 /* ── CMOS connection constants ────────────────────────────────────────── */
 #define BRIDGE_MASTER_IP        "127.0.0.1"
 #define BRIDGE_MASTER_PORT      10000
-#define BRIDGE_PUB_PORT         12001           /* listen port for read responses  */
+#define BRIDGE_PUB_PORT         13000           /* listen port for read responses  */
 #define BRIDGE_NODE_NAME        "inverter_node"  /* node name for master registration */
-#define BRIDGE_SUB_HMI_TOPIC    "hmi_test_command_output"   /* topic for write/read requests   */
+#define BRIDGE_SUB_HMI_TOPIC    "hmi_inverter"   /* topic for write/read requests   */
 #define BRIDGE_PUB_TOPIC        "inverter"       /* topic for read responses        */
-#define BRIDGE_PUB_POLL_US      10000u           /* 10 ms poll interval             */
+#define BRIDGE_PUB_POLL_US      500000u           /* 500 ms poll interval             */
 
 /* this project currently only wires up Inverter#1, so uid is fixed */
 #define INVERTER_BRIDGE_DEFAULT_UID  1u
@@ -144,7 +144,7 @@ static int on_read(uint8_t uid, uint16_t addr, uint16_t *out_val)
 
 /* ── CMOS callbacks ───────────────────────────────────────────────────── */
 
-static void on_output_voltage_set_cmd(const char *topic, const char *value)
+static void on_inv_test_cmd(const char *topic, const char *value)
 {
     uint16_t addr = 0x0100;
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
@@ -156,7 +156,7 @@ static void on_output_voltage_set_cmd(const char *topic, const char *value)
     on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
 }
 
-static void on_output_frequency_set_cmd(const char *topic, const char *value)
+static void on_inv_shutdown_cmd(const char *topic, const char *value)
 {
     uint16_t addr = 0x0101;
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
@@ -253,8 +253,8 @@ static void *cmos_sub_thread(void *arg)
 
     pthread_cleanup_push(cleanup_sub_ctx, ctx);
 
-    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "main_pump", on_output_voltage_set_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "output_frequency_set",     on_output_frequency_set_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "inv_test", on_inv_test_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "inv_shutdown",     on_inv_shutdown_cmd);
     cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "battery_low_voltage_set",  on_battery_low_voltage_set_cmd);
     cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "battery_high_voltage_set", on_battery_high_voltage_set_cmd);
     cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "max_charge_current_set",   on_max_charge_current_set_cmd);
@@ -321,7 +321,10 @@ static void *cmos_pub_poll_thread(void *arg)
         cmos_pub_poll();
 
         for (int i = 0; i < global_config.inverter_count; i++) {
-            publish_pool_register(&inverters[i], NULL, "ac_output_voltage", 0x0003);
+            publish_pool_register(&inverters[i], NULL, "ac_output_voltage", 0xBB00);
+            publish_pool_register(&inverters[i], NULL, "ac_output_current", 0xBB01);
+            publish_pool_register(&inverters[i], NULL, "main_control", 0xBB02);
+            publish_pool_register(&inverters[i], NULL, "state", 0xBB03);
         }
 
         usleep(BRIDGE_PUB_POLL_US);

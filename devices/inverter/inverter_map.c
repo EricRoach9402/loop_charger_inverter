@@ -50,9 +50,9 @@ static const device_register_mapping_t inverter1_mapping_table[] = {
     { 0x0000,  0xBB00,  ACCESS_RO,  "INV1_Device_Status"              },
     { 0x0001,  0xBB01,  ACCESS_RO,  "INV1_Fault_Code"                 },
     { 0x0002,  0xBB02,  ACCESS_RO,  "INV1_Warning_Code"               },
+    { 0x0003,  0xBB03,  ACCESS_RO,  "INV1_Warning_Code1"              },
 
     /* ── AC output measurements ─────────────────────────────────────────── */
-    { 0x0010,  0xBB03,  ACCESS_RO,  "INV1_AC_Output_Voltage"          },
     { 0x0011,  0xBB04,  ACCESS_RO,  "INV1_AC_Output_Current"          },
     { 0x0012,  0xBB05,  ACCESS_RO,  "INV1_AC_Output_Frequency"        },
     { 0x0013,  0xBB06,  ACCESS_RO,  "INV1_AC_Output_Active_Power"     },

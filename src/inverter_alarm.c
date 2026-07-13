@@ -67,8 +67,6 @@ static const alarm_entry_t inverter_alarm_table[] = {
 
 /* Per-unit mutable runtime state – one slot set per Inverter unit. */
 static alarm_state_t inverter1_alarm_states[ARRAY_SIZE(inverter_alarm_table)];
-static alarm_state_t inverter2_alarm_states[ARRAY_SIZE(inverter_alarm_table)];
-static alarm_state_t inverter3_alarm_states[ARRAY_SIZE(inverter_alarm_table)];
 
 /* ── UID → alarm state registry ──────────────────────────────────────── */
 
@@ -80,8 +78,6 @@ typedef struct {
 
 static const inverter_alarm_registry_t alarm_registry[] = {
     { 1u, inverter1_alarm_states, ARRAY_SIZE(inverter_alarm_table) },
-    { 2u, inverter2_alarm_states, ARRAY_SIZE(inverter_alarm_table) },
-    { 3u, inverter3_alarm_states, ARRAY_SIZE(inverter_alarm_table) },
 };
 
 /* Stable ctx storage – lifetime must outlast alarm_bridge_stop(). */
