@@ -11,9 +11,7 @@
  *
  * Pool regions
  * ────────────
- *  Inverter#1  (modbus_uid = 1):  0x0000 – 0x001F  (32 registers)
- *  Inverter#2  (modbus_uid = 2):  0x0020 – 0x003F  (32 registers)
- *  Inverter#3  (modbus_uid = 3):  0x0040 – 0x005F  (32 registers)
+ *  Inverter#1  (modbus_uid = 1):  0x0000 – 0x001F
  *
  * Pool stores raw register values.  No masking is applied here.
  * Consumers needing a masked view use pool_read_masked_by_device_addr().
@@ -45,54 +43,20 @@
  *  device addr   pool addr    access     description
  * ═══════════════════════════════════════════════════════════════════════════ */
 static const device_register_mapping_t inverter1_mapping_table[] = {
+    { 0x2000,  0xB000,  ACCESS_RW,  "operation_commands" },
+    { 0x2001,  0xB001,  ACCESS_RW,  "frequency_write_commands" },
+    { 0x2002,  0xB002,  ACCESS_RW,  "fault_Control_commands" },
 
-    /* ── Status & fault registers ──────────────────────────────────────── */
-    { 0x0000,  0xBB00,  ACCESS_RO,  "INV1_Device_Status"              },
-    { 0x0001,  0xBB01,  ACCESS_RO,  "INV1_Fault_Code"                 },
-    { 0x0002,  0xBB02,  ACCESS_RO,  "INV1_Warning_Code"               },
-    { 0x0003,  0xBB03,  ACCESS_RO,  "INV1_Warning_Code1"              },
+    { 0x2100,  0xBB00,  ACCESS_RO,  "fault_warning_code" },
+    { 0x2101,  0xBB01,  ACCESS_RO,  "inverter_operating_status" },
+    { 0x2102,  0xBB02,  ACCESS_RO,  "frequency_read_command" },
+    { 0x2103,  0xBB03,  ACCESS_RO,  "output_frequency" },
+    { 0x2104,  0xBB04,  ACCESS_RO,  "output_current" },
+    { 0x2105,  0xBB05,  ACCESS_RO,  "dc_Bus_voltage" },
 
-    /* ── AC output measurements ─────────────────────────────────────────── */
-    { 0x0011,  0xBB04,  ACCESS_RO,  "INV1_AC_Output_Current"          },
-    { 0x0012,  0xBB05,  ACCESS_RO,  "INV1_AC_Output_Frequency"        },
-    { 0x0013,  0xBB06,  ACCESS_RO,  "INV1_AC_Output_Active_Power"     },
-    { 0x0014,  0xBB07,  ACCESS_RO,  "INV1_AC_Output_Apparent_Power"   },
-    { 0x0015,  0xBB08,  ACCESS_RO,  "INV1_AC_Output_Load_Percent"     },
+    { 0x210C,  0xBB0C,  ACCESS_RO,  "motor_actual_speed" },
 
-    /* ── AC input / grid measurements ──────────────────────────────────── */
-    { 0x0020,  0xBB09,  ACCESS_RO,  "INV1_Grid_Voltage"               },
-    { 0x0021,  0xBB0A,  ACCESS_RO,  "INV1_Grid_Frequency"             },
-
-    /* ── DC bus / PV input ──────────────────────────────────────────────── */
-    { 0x0030,  0xBB0B,  ACCESS_RO,  "INV1_PV_Input_Voltage"           },
-    { 0x0031,  0xBB0C,  ACCESS_RO,  "INV1_PV_Input_Current"           },
-    { 0x0032,  0xBB0D,  ACCESS_RO,  "INV1_PV_Input_Power"             },
-    { 0x0033,  0xBB0E,  ACCESS_RO,  "INV1_DC_Bus_Voltage"             },
-
-    /* ── Battery measurements ───────────────────────────────────────────── */
-    { 0x0040,  0xBB0F,  ACCESS_RO,  "INV1_Battery_Voltage"            },
-    { 0x0041,  0xBB10,  ACCESS_RO,  "INV1_Battery_Current"            },
-    { 0x0042,  0xBB11,  ACCESS_RO,  "INV1_Battery_State_of_Charge"    },
-    { 0x0043,  0xBB12,  ACCESS_RO,  "INV1_Battery_Temperature"        },
-    { 0x0044,  0xBB13,  ACCESS_RO,  "INV1_Battery_Charge_Mode"        },
-
-    /* ── Temperature ────────────────────────────────────────────────────── */
-    { 0x0050,  0xBB14,  ACCESS_RO,  "INV1_Heatsink_Temperature"       },
-    { 0x0051,  0xBB15,  ACCESS_RO,  "INV1_Transformer_Temperature"    },
-
-    /* ── Energy counters ────────────────────────────────────────────────── */
-    { 0x0060,  0xBB16,  ACCESS_RO,  "INV1_Total_Output_Energy_Lo"     },
-    { 0x0061,  0xBB17,  ACCESS_RO,  "INV1_Total_Output_Energy_Hi"     },
-    { 0x0062,  0xBB18,  ACCESS_RO,  "INV1_Total_PV_Energy_Lo"         },
-    { 0x0063,  0xBB19,  ACCESS_RO,  "INV1_Total_PV_Energy_Hi"         },
-
-    /* ── Configuration (read/write) ─────────────────────────────────────── */
-    { 0x0100,  0xBB1A,  ACCESS_RW,  "INV1_Output_Voltage_Set"         },
-    { 0x0101,  0xBB1B,  ACCESS_RW,  "INV1_Output_Frequency_Set"       },
-    { 0x0102,  0xBB1C,  ACCESS_RW,  "INV1_Battery_Low_Voltage_Set"    },
-    { 0x0103,  0xBB1D,  ACCESS_RW,  "INV1_Battery_High_Voltage_Set"   },
-    { 0x0104,  0xBB1E,  ACCESS_RW,  "INV1_Max_Charge_Current_Set"     },
-    { 0x0105,  0xBB1F,  ACCESS_RW,  "INV1_Work_Mode_Set"              },
+    { 0x220A,  0xBB0A,  ACCESS_RO,  "pid feedback value" },
 };
 
 const device_map_profile_t inverter1_profile = {
@@ -124,3 +88,21 @@ const device_map_profile_t *inverter_find_profile_by_uid(uint8_t uid)
     }
     return NULL;
 }
+
+// RW
+const uint16_t int_operation_cmd_reg = 0xB000;
+const uint16_t int_frequency_write_cmd_reg = 0xB001;
+const uint16_t int_fault_control_cmd_reg = 0xB002;
+
+// RO
+const uint16_t int_fault_warning_code_reg = 0xBB00;
+const uint16_t int_operation_status_reg = 0xBB01;
+const uint16_t int_frequency_read_cmd_reg = 0xBB02;
+const uint16_t int_out_frequency_reg = 0xBB03;
+const uint16_t int_out_current_reg = 0xBB04;
+const uint16_t int_dc_bus_voltage_reg = 0xBB05;
+const uint16_t int_motor_actual_speed_reg = 0xBB0C;
+const uint16_t int_pid_feedback_value_reg = 0xBB0A;
+
+//device
+const uint16_t dev_operation_cmd_reg = 0x2001;

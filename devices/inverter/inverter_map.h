@@ -54,4 +54,22 @@ typedef struct {
  */
 const device_map_profile_t *inverter_find_profile_by_uid(uint8_t uid);
 
+// RW
+extern const uint16_t int_operation_cmd_reg;
+extern const uint16_t int_frequency_write_cmd_reg;
+extern const uint16_t int_fault_control_cmd_reg;
+
+// RO
+extern const uint16_t int_fault_warning_code_reg;
+extern const uint16_t int_operation_status_reg;
+extern const uint16_t int_frequency_read_cmd_reg;
+extern const uint16_t int_out_frequency_reg;
+extern const uint16_t int_out_current_reg;
+extern const uint16_t int_dc_bus_voltage_reg;
+extern const uint16_t int_motor_actual_speed_reg;
+extern const uint16_t int_pid_feedback_value_reg;
+
+//device
+extern const uint16_t dev_operation_cmd_reg;
+
 #endif /* INVERTER_MAP_H */

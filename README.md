@@ -70,3 +70,18 @@ Override `PKG_CONFIG` to point at a custom wrapper:
 ```bash
 make ARCH=x86 PKG_CONFIG=/opt/my-sdk/bin/pkg-config
 ```
+
+## Runtime dependencies / deploying to another machine
+
+Both `x86/loop_charger_inverter` and `arm/loop_charger_inverter` link json-c
+**statically**, so they are self-contained: you can copy the binary to
+another machine of the same architecture without installing `libjson-c` (or
+even `libjson-c-dev`) there. Verify with `ldd`, which should list only
+standard libraries (`libpthread`, `libdl`, `libc`) and no `libjson-c.so.*`.
+
+If you need the old dynamic-linked x86 binary instead (smaller binary, but
+the target host must have `libjson-c.so.*` installed), build with:
+
+```bash
+make ARCH=x86 JSONC_LINK_MODE=dynamic
+```

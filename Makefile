@@ -47,6 +47,15 @@
 #
 # For x86 with a custom pkg-config wrapper:
 #   make ARCH=x86 PKG_CONFIG=/opt/sdk/bin/pkg-config
+#
+# x86 linking mode for json-c
+# ────────────────────────────
+# By default json-c is linked STATICALLY on x86 too (JSONC_LINK_MODE=static),
+# so the resulting x86/loop_charger_inverter binary has no runtime dependency
+# on libjson-c and can be copied to another x86 machine that never had
+# libjson-c(-dev) installed. Force the old dynamic-link behavior with:
+#   make ARCH=x86 JSONC_LINK_MODE=dynamic
+# (dynamic linking requires libjson-c.so.* to be present on the target host)
 ###############################################################################
 
 # ── Build options ─────────────────────────────────────────────────────────
@@ -114,12 +123,32 @@ ifeq ($(ARCH), x86)
     EXTRA_DEPS =
 
     # Resolve json-c via system pkg-config.
-    PKG_CONFIG   ?= pkg-config
-    JSONC_CFLAGS := $(shell $(PKG_CONFIG) --cflags json-c 2>/dev/null)
-    JSONC_LIBS   := $(shell $(PKG_CONFIG) --libs   json-c 2>/dev/null)
+    PKG_CONFIG      ?= pkg-config
+    JSONC_CFLAGS    := $(shell $(PKG_CONFIG) --cflags json-c 2>/dev/null)
+    JSONC_LIBS_RAW  := $(shell $(PKG_CONFIG) --libs   json-c 2>/dev/null)
+
+    # JSONC_LINK_MODE = static (default) | dynamic
+    #   static  -> libjson-c.a is linked directly into the binary, so it
+    #              runs on any x86 host without libjson-c installed.
+    #   dynamic -> smaller binary, but the target host must have
+    #              libjson-c.so.* installed at runtime.
+    JSONC_LINK_MODE ?= static
+    ifeq ($(JSONC_LINK_MODE), static)
+        JSONC_LIBS := -Wl,-Bstatic $(JSONC_LIBS_RAW) -Wl,-Bdynamic
+    else ifeq ($(JSONC_LINK_MODE), dynamic)
+        JSONC_LIBS := $(JSONC_LIBS_RAW)
+    else
+        $(error Unsupported JSONC_LINK_MODE "$(JSONC_LINK_MODE)". Use static or dynamic.)
+    endif
+
     ifeq ($(SKIP_TOOLCHAIN_CHECK),)
-        ifeq ($(JSONC_LIBS),)
+        ifeq ($(JSONC_LIBS_RAW),)
             $(error json-c not found. Run: sudo apt install libjson-c-dev (or: make setup ARCH=x86))
+        endif
+        ifeq ($(JSONC_LINK_MODE), static)
+            ifeq ($(shell gcc -print-file-name=libjson-c.a 2>/dev/null),libjson-c.a)
+                $(error libjson-c.a (static library) not found. It ships inside libjson-c-dev on most distros; run: sudo apt install libjson-c-dev (or build with JSONC_LINK_MODE=dynamic))
+            endif
         endif
     endif
 

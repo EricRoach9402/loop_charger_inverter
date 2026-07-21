@@ -39,7 +39,7 @@
 #define BRIDGE_MASTER_PORT      10000
 #define BRIDGE_PUB_PORT         13000           /* listen port for read responses  */
 #define BRIDGE_NODE_NAME        "inverter_node"  /* node name for master registration */
-#define BRIDGE_SUB_HMI_TOPIC    "hmi_inverter"   /* topic for write/read requests   */
+#define BRIDGE_SUB_HMI_TOPIC    "control_output"   /* topic for write/read requests   */
 #define BRIDGE_PUB_TOPIC        "inverter"       /* topic for read responses        */
 #define BRIDGE_PUB_POLL_US      500000u           /* 500 ms poll interval             */
 
@@ -144,74 +144,46 @@ static int on_read(uint8_t uid, uint16_t addr, uint16_t *out_val)
 
 /* ── CMOS callbacks ───────────────────────────────────────────────────── */
 
-static void on_inv_test_cmd(const char *topic, const char *value)
+static void on_main_pump_duty_cmd(const char *topic, const char *value)
 {
-    uint16_t addr = 0x0100;
+    (void)topic;
+    uint16_t frequency_register = dev_operation_cmd_reg;
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
 
-    (void)topic;
+    LOG_INFO("[CMOS Bridge] Operation commands received register: '%4x' value:'%s'",frequency_register, value);
 
-    LOG_INFO("[CMOS Bridge] output voltage set command received: '%s'", value);
+    on_write(INVERTER_BRIDGE_DEFAULT_UID, frequency_register, val);
+}
+
+static void on_operation_cmd(const char *topic, const char *value)
+{
+    (void)topic;
+    uint16_t addr = int_operation_cmd_reg;
+    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
+
+    LOG_INFO("[CMOS Bridge] Operation commands received register: '%4x' value:'%s'",addr, value);
 
     on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
 }
 
-static void on_inv_shutdown_cmd(const char *topic, const char *value)
+static void on_frequency_write_cmd(const char *topic, const char *value)
 {
-    uint16_t addr = 0x0101;
-    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
-
     (void)topic;
-
-    LOG_INFO("[CMOS Bridge] output frequency set command received: '%s'", value);
+    uint16_t addr = int_frequency_write_cmd_reg;
+    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
+    
+    LOG_INFO("[CMOS Bridge] Operation commands received register: '%4x' value:'%s'",addr, value);
 
     on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
 }
 
-static void on_battery_low_voltage_set_cmd(const char *topic, const char *value)
+static void on_fault_control_cmd(const char *topic, const char *value)
 {
-    uint16_t addr = 0x0102;
-    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
-
     (void)topic;
-
-    LOG_INFO("[CMOS Bridge] battery low voltage set command received: '%s'", value);
-
-    on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
-}
-
-static void on_battery_high_voltage_set_cmd(const char *topic, const char *value)
-{
-    uint16_t addr = 0x0103;
+    uint16_t addr = int_fault_control_cmd_reg;
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
-
-    (void)topic;
-
-    LOG_INFO("[CMOS Bridge] battery high voltage set command received: '%s'", value);
-
-    on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
-}
-
-static void on_max_charge_current_set_cmd(const char *topic, const char *value)
-{
-    uint16_t addr = 0x0104;
-    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
-
-    (void)topic;
-
-    LOG_INFO("[CMOS Bridge] max charge current set command received: '%s'", value);
-
-    on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
-}
-
-static void on_work_mode_set_cmd(const char *topic, const char *value)
-{
-    uint16_t addr = 0x0105;
-    uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
-
-    (void)topic;
-
-    LOG_INFO("[CMOS Bridge] work mode set command received: '%s'", value);
+    
+    LOG_INFO("[CMOS Bridge] Operation commands received register: '%4x' value:'%s'",addr, value);
 
     on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
 }
@@ -253,12 +225,10 @@ static void *cmos_sub_thread(void *arg)
 
     pthread_cleanup_push(cleanup_sub_ctx, ctx);
 
-    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "inv_test", on_inv_test_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "inv_shutdown",     on_inv_shutdown_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "battery_low_voltage_set",  on_battery_low_voltage_set_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "battery_high_voltage_set", on_battery_high_voltage_set_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "max_charge_current_set",   on_max_charge_current_set_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "work_mode_set",            on_work_mode_set_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "inv_operation_commands", on_operation_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "inv_frequency_write_commands", on_frequency_write_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "command", "inv_fault_Control_commands", on_fault_control_cmd);
+    cmos_sub_add(ctx, BRIDGE_SUB_HMI_TOPIC, NULL, "ctrl", "main_pump", on_main_pump_duty_cmd);
 
     LOG_INFO("[CMOS Bridge] subscriber thread ready, "
              "topic='%s' (write + read).", BRIDGE_SUB_HMI_TOPIC);
@@ -321,10 +291,13 @@ static void *cmos_pub_poll_thread(void *arg)
         cmos_pub_poll();
 
         for (int i = 0; i < global_config.inverter_count; i++) {
-            publish_pool_register(&inverters[i], NULL, "ac_output_voltage", 0xBB00);
-            publish_pool_register(&inverters[i], NULL, "ac_output_current", 0xBB01);
-            publish_pool_register(&inverters[i], NULL, "main_control", 0xBB02);
-            publish_pool_register(&inverters[i], NULL, "state", 0xBB03);
+            publish_pool_register(&inverters[i], NULL, "fault_warning_code", int_fault_warning_code_reg);
+            publish_pool_register(&inverters[i], NULL, "inverter_operating_status", int_operation_status_reg);
+            publish_pool_register(&inverters[i], NULL, "frequency_read_command", int_frequency_read_cmd_reg);
+            publish_pool_register(&inverters[i], NULL, "output_frequency", int_out_frequency_reg);
+            publish_pool_register(&inverters[i], NULL, "output_current", int_out_current_reg);
+            publish_pool_register(&inverters[i], NULL, "dc_bus_voltage", int_dc_bus_voltage_reg);
+            publish_pool_register(&inverters[i], NULL, "motor_actual_speed", int_motor_actual_speed_reg);
         }
 
         usleep(BRIDGE_PUB_POLL_US);
